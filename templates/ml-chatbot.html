@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ML Market Assistant Chatbot</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter&family=Roboto&display=swap');
+
+  body {
+    margin: 0;
+    font-family: 'Inter', 'Roboto', sans-serif;
+    background-color: #f9fafb;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    color: #111827;
+  }
+
+  .container {
+    max-width: 600px;
+    margin: auto;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    padding: 1rem;
+  }
+
+  .instruction {
+    text-align: center;
+    font-size: 1rem;
+    color: #374151;
+    margin-bottom: 0.5rem;
+  }
+
+  .chat-window {
+    flex: 1;
+    background: #ffffff;
+    border-radius: 12px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    padding: 1rem;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .message {
+    max-width: 75%;
+    padding: 0.5rem 0.75rem;
+    border-radius: 12px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    font-size: 0.9rem;
+    line-height: 1.3;
+    position: relative;
+    word-wrap: break-word;
+  }
+
+  .message .timestamp {
+    font-size: 0.7rem;
+    color: #6b7280;
+    margin-top: 0.25rem;
+    text-align: right;
+  }
+
+  .message.user {
+    background-color: #dbeafe; /* light blue */
+    align-self: flex-end;
+    border-bottom-right-radius: 0;
+  }
+
+  .message.bot {
+    background-color: #f3f4f6; /* soft gray */
+    align-self: flex-start;
+    border-bottom-left-radius: 0;
+  }
+
+  .message .message-text { /* New style for the text part of the message */
+    white-space: pre-line; /* Preserves newlines and wraps text */
+  }
+
+  .input-area {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+  }
+
+  textarea {
+    flex: 1;
+    resize: none;
+    border-radius: 12px;
+    border: 1px solid #d1d5db;
+    padding: 0.75rem 1rem;
+    font-family: 'Inter', 'Roboto', sans-serif;
+    font-size: 1rem;
+    line-height: 1.4;
+    min-height: 48px;
+    max-height: 120px;
+    box-sizing: border-box;
+  }
+
+  textarea:focus {
+    outline: none;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59,130,246,0.3);
+  }
+
+  button {
+    background-color: #3b82f6;
+    color: white;
+    border: none;
+    border-radius: 12px;
+    padding: 0 1.5rem;
+    font-size: 1rem;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+    user-select: none;
+  }
+
+  #micButton {
+    background-color: #6b7280; /* Gray */
+    padding: 0 1rem; /* Adjust padding if using an icon */
+  }
+  #micButton:hover:not(:disabled) {
+    background-color: #4b5563;
+  }
+  #micButton.listening {
+    background-color: #ef4444; /* Red when listening */
+  }
+  #micButton.listening-wake-word {
+    background-color: #f59e0b; /* Amber for wake word */
+  }
+  #micButton.listening-command {
+    background-color: #10b981; /* Green for command listening */
+  }
+  button:disabled {
+    background-color: #93c5fd;
+    cursor: not-allowed;
+  }
+
+  button:hover:not(:disabled) {
+    background-color: #2563eb;
+  }
+
+  @media (max-width: 640px) {
+    .container {
+      height: 100vh;
+      padding: 0.5rem;
+    }
+    .chat-window {
+      padding: 0.75rem;
+    }
+    button {
+      padding: 0 1rem;
+      font-size: 0.9rem;
+    }
+  }
+</style>
+</head>
+<body>
+  <div class="container" role="main" aria-label="ML Market Assistant Chat Interface">
+    <div class="instruction" aria-live="polite">
+      This is your ML market assistant. Start chatting with it about option trends, support/resistance, or teach it your custom logic.
+    </div>
+    <div id="chatWindow" class="chat-window" role="log" aria-live="polite" aria-relevant="additions"></div>
+    <form id="chatForm" class="input-area" aria-label="Chat input form">
+      <textarea id="chatInput" rows="1" placeholder="Type your message here..." aria-label="Chat message input"></textarea>
+      <button type="submit" id="sendButton" disabled>Send</button>
+      <button type="button" id="micButton" title="Use Voice Input">🎤</button>
+      <button type="button" id="clearChatButton" style="margin-left: 0.5rem; background-color: #6b7280;">Clear</button>
+    </form>
+  </div>
+
+<script>
+  const chatWindow = document.getElementById('chatWindow');
+  const chatForm = document.getElementById('chatForm');
+  const chatInput = document.getElementById('chatInput');
+  const sendButton = document.getElementById('sendButton');
+  const clearChatButton = document.getElementById('clearChatButton');
+  const instructionDiv = document.querySelector('.instruction'); // Get the instruction div
+  const micButton = document.getElementById('micButton');
+  let currentExpiryDate = '';
+
+  // Load chat history from localStorage - ensure it's an array
+  let rawHistory = localStorage.getItem('mlChatHistory');
+  let chatHistory = [];
+  try {
+    chatHistory = rawHistory ? JSON.parse(rawHistory) : [];
+    if (!Array.isArray(chatHistory)) chatHistory = []; // Ensure it's an array
+  } catch (e) {
+    console.error("Error parsing chat history from localStorage:", e);
+    chatHistory = []; // Reset to empty if parsing fails
+  }
+
+  let currentUserRole = ''; // To store the user's role (emperor/king)
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let wakeWordRecognition;
+  let commandRecognition;
+  let lastBotInteractionId = null; // To store the interaction_id of the last bot prediction
+
+  function formatTimestamp(date) {
+    return date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+  }
+
+  function addMessage(text, sender, interactionId = null, messageId = null, isStatus = false) {
+    const messageElem = document.createElement('div');
+    messageElem.classList.add('message', sender);
+    messageElem.setAttribute('role', 'article');
+    messageElem.setAttribute('aria-label', sender === 'user' ? 'User message' : 'Bot message');
+
+    if (messageId) {
+      messageElem.id = messageId;
+    }
+
+    const textElem = document.createElement('div');
+    textElem.classList.add('message-text'); // Add class for styling
+    textElem.textContent = text;
+    messageElem.appendChild(textElem);
+
+    const timestampElem = document.createElement('div');
+    timestampElem.className = 'timestamp';
+    timestampElem.textContent = formatTimestamp(new Date());
+    messageElem.appendChild(timestampElem);
+
+    if (sender === 'bot' && interactionId && !isStatus && currentUserRole === 'emperor') { // Only add feedback for bot predictions if user is 'emperor'
+      messageElem.dataset.interactionId = interactionId; // Store interaction_id on the element
+      lastBotInteractionId = interactionId; // Keep track of the latest one
+
+      // Add feedback buttons
+      const feedbackContainer = document.createElement('div');
+      feedbackContainer.style.marginTop = '8px';
+      feedbackContainer.style.textAlign = 'right';
+
+      const correctButton = document.createElement('button');
+      correctButton.textContent = '👍 Correct';
+      correctButton.style.fontSize = '0.8rem';
+      correctButton.style.padding = '0.25rem 0.5rem';
+      correctButton.style.marginRight = '5px';
+      correctButton.style.backgroundColor = '#22c55e'; // Green
+      correctButton.onclick = () => handleFeedback(interactionId, true);
+      feedbackContainer.appendChild(correctButton);
+
+      const incorrectButton = document.createElement('button');
+      incorrectButton.textContent = '👎 Incorrect';
+      incorrectButton.style.fontSize = '0.8rem';
+      incorrectButton.style.padding = '0.25rem 0.5rem';
+      incorrectButton.style.backgroundColor = '#ef4444'; // Red
+      incorrectButton.onclick = () => handleFeedback(interactionId, false);
+      feedbackContainer.appendChild(incorrectButton);
+
+      messageElem.appendChild(feedbackContainer);
+    }
+
+    chatWindow.appendChild(messageElem);
+    chatWindow.scrollTop = chatWindow.scrollHeight;
+    return messageElem;
+  }
+
+  function removeMessageById(id) {
+    const msg = document.getElementById(id);
+    if (msg) msg.remove();
+  }
+
+  function saveChatHistory() {
+    // Store interactionId with bot messages if available
+    // Filter out any potential status messages if they accidentally got in
+    const historyToSave = chatHistory.filter(msg => !msg.isStatus).map(msg => ({
+        ...msg,
+        interactionId: msg.sender === 'bot' ? msg.interactionId : undefined
+    }));
+    localStorage.setItem('mlChatHistory', JSON.stringify(historyToSave));
+  }
+
+  function renderChatHistory() {
+    chatWindow.innerHTML = '';
+    chatHistory.forEach(({text, sender, timestamp}) => {
+      const messageElem = document.createElement('div');
+      messageElem.classList.add('message', sender);
+      messageElem.setAttribute('role', 'article');
+      messageElem.setAttribute('aria-label', sender === 'user' ? 'User message' : 'Bot message');
+
+      const textElem = document.createElement('div');
+      textElem.classList.add('message-text'); // Add class for styling
+      textElem.textContent = text;
+      messageElem.appendChild(textElem);
+
+      const timestampElem = document.createElement('div');
+      timestampElem.className = 'timestamp';
+      timestampElem.textContent = new Date(timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+      messageElem.appendChild(timestampElem);
+      // Re-attach feedback buttons if it was a bot message with an ID (complex, handled by new messages for now)
+      if (sender === 'bot' && messageElem.dataset.interactionId) {
+          // Logic to re-add buttons can be complex, for now, we'll add them on new messages
+      }
+      chatWindow.appendChild(messageElem);
+    });
+    chatWindow.scrollTop = chatWindow.scrollHeight;
+  }
+
+  chatInput.addEventListener('input', () => {
+    sendButton.disabled = chatInput.value.trim().length === 0;
+    // Auto-resize textarea
+    chatInput.style.height = 'auto';
+    chatInput.style.height = (chatInput.scrollHeight) + 'px';
+  });
+
+  chatInput.addEventListener('keypress', function(event) {
+      if (event.key === 'Enter' && !event.shiftKey) {
+          event.preventDefault(); // Prevent default Enter behavior (new line)
+          chatForm.dispatchEvent(new Event('submit', { cancelable: true }));
+      }
+  });
+
+  async function handleFeedback(interactionId, isCorrect) {
+    let feedbackPayload = {
+        interaction_id: interactionId,
+        is_correct: isCorrect,
+        comment: isCorrect ? "User marked as correct." : "User marked as incorrect."
+    };
+
+    if (!isCorrect) {
+        // Prompt for more details if incorrect
+        const correctedBias = prompt("Prediction was incorrect. What should be the BIAS? (Bullish/Bearish/Neutral/Skip)");
+        const correctedStrength = prompt("What should be the STRENGTH? (Strong/Weak/Neutral/Skip)");
+        const ruleSuggestion = prompt("Any RULE suggestion? (e.g., IF X > Y THEN Z / Skip)");
+        const userComment = prompt("Additional comments?");
+
+        feedbackPayload.correction = {};
+        if (correctedBias && correctedBias.toLowerCase() !== 'skip') feedbackPayload.correction.bias = correctedBias;
+        if (correctedStrength && correctedStrength.toLowerCase() !== 'skip') feedbackPayload.correction.strength = correctedStrength;
+        if (ruleSuggestion && ruleSuggestion.toLowerCase() !== 'skip') feedbackPayload.rule_suggestion = ruleSuggestion;
+        if (userComment) feedbackPayload.comment = userComment;
+    }
+
+        const sendingFeedbackMessage = addMessage(`Sending feedback for interaction ${interactionId}...`, 'bot'); // Capture the element
+    try {
+        const response = await fetch('/chat/feedback', {
+              method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ feedback: feedbackPayload }) // Send the structured payload
+        });
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || `Feedback HTTP error! Status: ${response.status}`);
+        }
+        const feedbackResponse = await response.json();
+        const reply = feedbackResponse.message || "Feedback submitted.";
+
+        if (sendingFeedbackMessage) sendingFeedbackMessage.remove();
+
+        addMessage(reply, 'bot');
+        chatHistory.push({ text: reply, sender: 'bot', timestamp: new Date().toISOString() });
+        saveChatHistory();
+
+    } catch (error) {
+        if (sendingFeedbackMessage) sendingFeedbackMessage.remove();
+        console.error("Error sending feedback:", error);
+        const errorMessage = `Error sending feedback: ${error.message}`;
+        addMessage(errorMessage, 'bot');
+        chatHistory.push({ text: errorMessage, sender: 'bot', timestamp: new Date().toISOString() });
+        saveChatHistory();
+    }
+}
+
+  async function handleUserMessage(userText) {
+    chatHistory.push({ text: userText, sender: 'user', timestamp: new Date().toISOString(), isStatus: false });
+    saveChatHistory();
+    addMessage(userText, 'user');
+    chatInput.value = '';
+    sendButton.disabled = true;
+    chatInput.style.height = 'auto'; // Reset height
+
+    // Simple keyword check for general feedback/rule input, separate from button-triggered feedback
+    const feedbackKeywords = ["feedback:", "correction:", "rule:"]; // Keywords for text-based feedback/rules
+    let isGeneralFeedbackText = feedbackKeywords.some(keyword => userText.toLowerCase().startsWith(keyword)); // Corrected variable name
+    let thinkingMessageElem = null;
+
+    try {
+      let response;
+      let botReplyText = "";
+      let currentInteractionId = null;
+      
+            if (isGeneralFeedbackText) {
+        if (currentUserRole === 'emperor') {
+            // Handling text-based general feedback/rule suggestions for Emperor
+            addMessage("Sending feedback to the model...", 'bot'); // Temporary message
+            response = await fetch('/chat/feedback', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              // Send as a structured object, even for general text feedback
+              body: JSON.stringify({ feedback: { comment: userText, rule_suggestion: userText.toLowerCase().startsWith("rule:") ? userText.substring(5).trim() : null } })
+            });
+            if (!response.ok) {
+              const errorData = await response.json();
+              throw new Error(errorData.error || `Feedback HTTP error! Status: ${response.status}`);
+            }
+            const feedbackResponse = await response.json();
+            botReplyText = feedbackResponse.message || "Feedback received and processed.";
+        } else {
+            // Disable text-based feedback for King
+            botReplyText = "Feedback features are disabled for this view.";
+        }
+      } else { // It's a prompt
+        if (!currentExpiryDate || currentExpiryDate === 'Not Selected') {
+            botReplyText = "Cannot process prompt: Expiry date not selected. Please go to the dashboard, select an expiry, and then open the chat.";
+            addMessage(botReplyText, 'bot', null, null, false);
+            chatHistory.push({ text: botReplyText, sender: 'bot', timestamp: new Date().toISOString(), isStatus: false });
+            saveChatHistory();
+            return;
+        }
+        thinkingMessageElem = addMessage("Thinking...", 'bot', null, null, true); // Mark as status
+        response = await fetch('/chat/prompt', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_prompt: userText, expiry_date: currentExpiryDate })
+        });
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || `Prompt HTTP error! Status: ${response.status}`);
+        }
+        const predictionData = await response.json();
+        currentInteractionId = predictionData.interaction_id; // Capture interaction_id
+        botReplyText = "Prediction:";
+        if (predictionData.bias && predictionData.bias !== "Undetermined") botReplyText += `\nBias: ${predictionData.bias}`;
+        if (predictionData.strength && predictionData.strength !== "Undetermined") botReplyText += `\nStrength: ${predictionData.strength}`;
+        if (predictionData.participants && predictionData.participants !== "Undetermined") botReplyText += `\nParticipants: ${predictionData.participants}`;
+        if (predictionData.confidence !== undefined) botReplyText += `\nConfidence: ${predictionData.confidence}%`;
+        if (predictionData.message && predictionData.message.toLowerCase() !== "could not determine prediction based on prompt or rules.") {
+             botReplyText += `\n(${predictionData.message})`;
+        }
+        // Add analysis notes if present
+        if (predictionData.analysis_notes && predictionData.analysis_notes.length > 0) {
+            botReplyText += "\n\nAnalysis Notes:";
+            predictionData.analysis_notes.forEach(note => {
+                botReplyText += `\n- ${note}`;
+            });
+        }
+        if (botReplyText === "Prediction:") {
+            botReplyText = predictionData.message || "I received your prompt but couldn't generate a specific prediction.";
+        }
+      }
+
+      if(thinkingMessageElem) thinkingMessageElem.remove();
+
+      chatHistory.push({ text: botReplyText, sender: 'bot', timestamp: new Date().toISOString(), interactionId: currentInteractionId, isStatus: false });
+      saveChatHistory();
+      addMessage(botReplyText, 'bot', currentInteractionId, null, false); // Pass interactionId to addMessage
+
+    } catch (error) {
+      if(thinkingMessageElem) thinkingMessageElem.remove();
+      console.error("Error processing message:", error);
+      const errorMessage = `Error: ${error.message}`;
+      chatHistory.push({ text: errorMessage, sender: 'bot', timestamp: new Date().toISOString(), isStatus: false });
+      saveChatHistory();
+      addMessage(errorMessage, 'bot');
+    }
+  }
+
+  chatForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const userText = chatInput.value.trim();
+    if (!userText) return;
+    await handleUserMessage(userText);
+  });
+
+  // --- Voice Command Logic with Wake Word "Hey Jarvis" ---
+  let wakeWordListenerActive = false;
+  let awaitingCommandAfterWakeWord = false;
+  let explicitlyStoppedWakeWordForCommand = false; // New flag
+  const WAKE_WORD = "hey jarvis";
+
+  if (SpeechRecognition) {
+    wakeWordRecognition = new SpeechRecognition();
+    wakeWordRecognition.continuous = true;
+    wakeWordRecognition.lang = 'en-US';
+    wakeWordRecognition.interimResults = false; // Only final results for wake word
+
+    commandRecognition = new SpeechRecognition();
+    commandRecognition.continuous = false; // Single command
+    commandRecognition.lang = 'en-US';
+    commandRecognition.interimResults = false;
+
+    micButton.addEventListener('click', () => {
+      if (currentExpiryDate === 'Not Selected') {
+        addMessage("Please select an expiry on the dashboard first to enable voice commands.", "bot");
+        return;
+      }
+      wakeWordListenerActive = !wakeWordListenerActive;
+
+      if (wakeWordListenerActive) {
+        micButton.classList.add('listening-wake-word');
+        micButton.textContent = '👂';
+        micButton.title = "Stop 'Hey Jarvis' Listener";
+        addMessage("Listening for 'Hey Jarvis'...", "bot", null, "wake-word-status-msg", true);
+        try {
+          wakeWordRecognition.start();
+        } catch (e) {
+          console.error("Wake word recognition start error:", e);
+          addMessage("Error starting 'Hey Jarvis' listener.", "bot");
+          resetVoiceStatesAndUI();
+        }
+      } else {
+        // User manually turned off
+        if (wakeWordRecognition) wakeWordRecognition.stop();
+        if (awaitingCommandAfterWakeWord && commandRecognition) commandRecognition.stop();
+        resetVoiceStatesAndUI();
+      }
+    });
+
+    function resetVoiceStatesAndUI() {
+      wakeWordListenerActive = false;
+      awaitingCommandAfterWakeWord = false;
+      micButton.classList.remove('listening-wake-word', 'listening-command', 'listening');
+      explicitlyStoppedWakeWordForCommand = false; // Reset new flag
+      micButton.textContent = '🎤';
+      micButton.title = "Use Voice Input ('Hey Jarvis')";
+      removeMessageById("wake-word-status-msg");
+      removeMessageById("command-status-msg");
+      // Re-evaluate send button if input has text
+      chatInput.disabled = (currentExpiryDate === 'Not Selected');
+      sendButton.disabled = chatInput.value.trim().length === 0 || chatInput.disabled;
+      micButton.disabled = chatInput.disabled;
+    }
+
+    wakeWordRecognition.onresult = (event) => {
+      const transcript = event.results[event.results.length - 1][0].transcript.toLowerCase().trim();
+      console.log("Wake word heard:", transcript);
+      if (transcript.includes(WAKE_WORD)) {
+        explicitlyStoppedWakeWordForCommand = true; // Signal that stop is intentional for command
+        removeMessageById("wake-word-status-msg");
+        // UI changes for "Jarvis: Yes?" and mic button will be handled in onend
+        wakeWordRecognition.stop(); // Will trigger onend to start commandRecognition
+      }
+    };
+
+    wakeWordRecognition.onend = () => {
+      console.log("Wake word recognition ended.");
+      if (explicitlyStoppedWakeWordForCommand) {
+        explicitlyStoppedWakeWordForCommand = false; // Reset this flag
+        awaitingCommandAfterWakeWord = true; // Set this for the command phase
+
+        addMessage("Jarvis: Yes?", "bot", null, "command-status-msg", true);
+        micButton.classList.remove('listening-wake-word');
+        micButton.classList.add('listening-command');
+        micButton.textContent = '🗣️';
+        micButton.title = "Listening for your command...";
+
+        try {
+          commandRecognition.start();
+        } catch (e) {
+          console.error("Command recognition start error:", e);
+          addMessage("Error starting command listener.", "bot");
+          resetVoiceStatesAndUI(); // Full reset
+          // No automatic micButton.click() here; user must re-initiate.
+        }
+      } else if (wakeWordListenerActive) { 
+        // This block executes if wakeWordRecognition ended for other reasons 
+        // (e.g., browser timeout, network error) AND the user hasn't manually stopped the listener.
+        console.log("Restarting wake word listener (unexpected end).");
+        removeMessageById("wake-word-status-msg"); // Clean up old one if any
+        addMessage("Re-listening for 'Hey Jarvis'...", "bot", null, "wake-word-status-msg", true);
+        micButton.classList.add('listening-wake-word'); // Ensure UI is correct
+        micButton.textContent = '👂';
+        try { 
+          wakeWordRecognition.start(); 
+        } catch (e) { 
+          console.error("Error restarting wake word listener:", e);
+          resetVoiceStatesAndUI(); // If restart fails, fully reset.
+        }
+      }
+      // If !explicitlyStoppedWakeWordForCommand AND !wakeWordListenerActive,
+      // it means the listener was manually turned off or a command cycle completed and reset.
+      // In this case, do nothing, as resetVoiceStatesAndUI() has handled it or will handle it.
+    };
+
+    wakeWordRecognition.onerror = (event) => {
+      console.error('Wake word error:', event.error);
+      removeMessageById("wake-word-status-msg");
+      if (event.error !== 'no-speech') { // 'no-speech' is common, don't always reset for it
+        addMessage(`Wake word listener error: ${event.error}.`, 'bot');
+        // For critical errors like 'not-allowed', a full reset is good.
+        // For others, onend might try to restart if wakeWordListenerActive is still true.
+        if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+            resetVoiceStatesAndUI();
+        }
+      }
+      // onend will handle restart if wakeWordListenerActive is still true and error wasn't fatal.
+    };
+
+    commandRecognition.onresult = (event) => {
+      const speechResult = event.results[0][0].transcript;
+      console.log("Command heard:", speechResult);
+      // Remove the "Jarvis: Yes?" status message
+      removeMessageById("command-status-msg");
+      // Automatically process the transcribed speech as a user message
+      handleUserMessage(speechResult);
+      sendButton.disabled = false;
+      chatInput.focus();
+      // chatForm.dispatchEvent(new Event('submit', { cancelable: true })); // Optional: auto-submit
+    };
+
+    commandRecognition.onend = () => {
+      console.log("Command recognition ended.");
+      // After a command attempt (successful or error leading to onend),
+      // always reset to the initial state. The user must click the mic button
+      // again to activate the "Hey Jarvis" listener.
+      resetVoiceStatesAndUI();
+    };
+
+    commandRecognition.onerror = (event) => {
+      console.error('Command recognition error:', event.error);
+      removeMessageById("command-status-msg");
+      addMessage(`Command error: ${event.error}. Try 'Hey Jarvis' again.`, 'bot');
+      // onend will handle transition back to wake word if wakeWordListenerActive
+    };
+
+  } else {
+    micButton.style.display = 'none'; // Hide mic button if API not supported
+    console.warn('Speech Recognition API not supported in this browser.');
+  }
+
+  clearChatButton.addEventListener('click', () => {
+    chatWindow.innerHTML = ''; // Clear UI
+    chatHistory = []; // Clear in-memory history
+    localStorage.removeItem('mlChatHistory'); // Clear persistent storage
+    const clearMessage = `👑Emperor,
+            Data and chat is cleared and pure as heart.
+            Lets gooo!!!`;
+    addMessage(clearMessage, 'bot'); // Add a fresh welcome message
+    chatHistory.push({text: clearMessage, sender: 'bot', timestamp: new Date().toISOString(), isStatus: false});
+    saveChatHistory();
+  });
+
+  // Initialize chat window with saved history
+  renderChatHistory();
+
+  // Get expiry date from URL on load
+  document.addEventListener('DOMContentLoaded', () => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const roleFromUrl = urlParams.get('role'); // Get role from URL
+    const expiryFromUrl = urlParams.get('expiry_date');
+    if (roleFromUrl) {
+        currentUserRole = roleFromUrl; // Set the global role variable
+    }
+    if (expiryFromUrl) {
+      currentExpiryDate = expiryFromUrl;
+      if (instructionDiv) {
+        instructionDiv.textContent += ` (Context: Expiry ${currentExpiryDate})`;
+      }
+      // Add a welcome message if chat is empty
+      if (chatHistory.length === 0) {
+        const welcomeMsg = `👑 Welcome back, Emperor of the Markets!
+"Charts taiyaar hain, indicators line mein hain, aur premium aapke signal ka intezaar kar raha hai."
+Aaj ka trend aap likhenge. Toh chaliye... command dijiye, aur market ko jhukayiye. 📈⚔️💰`;
+        chatHistory.push({text: welcomeMsg, sender: 'bot', timestamp: new Date().toISOString(), isStatus: false});
+        saveChatHistory();
+        renderChatHistory(); // Re-render to show welcome message
+      }
+      // Enable mic button only if expiry is selected AND user is Emperor
+      // Voice commands for King are not explicitly requested, keep them Emperor-only for now
+      // If King needs voice commands for prompts, this logic needs adjustment.
+      micButton.disabled = (currentUserRole !== 'emperor');
+    } else {
+      currentExpiryDate = 'Not Selected';
+      const welcomeMsg = "Welcome! Please select an expiry date on the dashboard first, then click the chat button to provide context for our discussion.";
+      addMessage(welcomeMsg, 'bot');
+      chatHistory.push({text: welcomeMsg, sender: 'bot', timestamp: new Date().toISOString(), isStatus: false});
+      saveChatHistory();
+      chatInput.disabled = true;
+      sendButton.disabled = true;
+      micButton.disabled = true; // Disable mic button if no expiry
+      chatInput.placeholder = "Select expiry on dashboard first...";
+    }
+  });
+</script>
+</body>
+</html>
