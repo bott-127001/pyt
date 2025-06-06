@@ -36,6 +36,10 @@ TOKEN_URL = 'https://api.upstox.com/v2/login/authorization/token'
 # ML Backend URL (assuming it runs on localhost:5001)
 ML_BACKEND_URL = os.environ.get('ML_BACKEND_URL', 'http://127.0.0.1:5001/ml')
 
+# Initialize both databases on startup (runs in production)
+init_db(EMPEROR_DB_FILE)
+init_db(KING_DB_FILE)
+
 # IST timezone offset
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -221,6 +225,10 @@ def calculate_15min_deltas(expiry_date):
 
 def start_schedulers(expiry_date):
     with scheduler_lock:
+        # Add daily cleanup jobs if they don't exist (ensures they are set up in deployed env)
+        # The daily_cleanup_job function now iterates through known DB files internally
+        if not scheduler.get_job('daily_cleanup'):
+             scheduler.add_job(daily_cleanup_job, 'cron', hour=0, minute=0, timezone='Asia/Kolkata', id='daily_cleanup', replace_existing=False)
         # Ensure schedulers are stopped before starting new ones
         stop_schedulers()
         # Schedule 5-second fetch and calculation job
@@ -251,13 +259,18 @@ def stop_schedulers():
         if not scheduler.get_jobs():
              scheduler.shutdown(wait=False)
 
-def daily_cleanup_job(db_file):
+def daily_cleanup_job():
     """Scheduled job to run at midnight IST to clear daily baselines."""
     with scheduler_lock: # Ensure thread safety if other jobs are running
-        conn = sqlite3.connect(db_file) # Use the passed db_file argument
-        c = conn.cursor()
-        # Use the provided db_file for cleanup
         today_str = datetime.now(IST).date().isoformat()
+
+        # Iterate through all known DB files for cleanup
+        db_files_to_clean = [EMPEROR_DB_FILE, KING_DB_FILE]
+
+        for db_file in db_files_to_clean:
+            conn = sqlite3.connect(db_file)
+            c = conn.cursor()
+            print(f"Running daily cleanup for baselines in {db_file} older than {today_str}...")
         print(f"Running daily cleanup for baselines older than {today_str}...")
 
         # Clear baseline_metrics for all expiry_dates that are for previous trading days.
@@ -268,7 +281,9 @@ def daily_cleanup_job(db_file):
         # For now, only resetting baselines as per primary requirement.
         conn.commit()
         conn.close()
-        print("Daily cleanup of baselines completed.")
+        print(f"Daily cleanup of baselines in {db_file} completed.")
+
+
 
 def send_metrics_to_ml_backend(expiry_date):
     """Collects all latest metrics and sends them to the ML backend for training."""
@@ -903,12 +918,9 @@ def handle_chat_feedback():
 app = WsgiToAsgi(flask_app)
 
 if __name__ == '__main__':
-    # Initialize both databases on startup
-    init_db(EMPEROR_DB_FILE)
-    init_db(KING_DB_FILE)
-    # Add the daily cleanup job to the scheduler for BOTH databases
-    scheduler.add_job(daily_cleanup_job, 'cron', hour=0, minute=0, timezone='Asia/Kolkata', args=[EMPEROR_DB_FILE], id='daily_cleanup_emperor')
-    scheduler.add_job(daily_cleanup_job, 'cron', hour=0, minute=0, timezone='Asia/Kolkata', args=[KING_DB_FILE], id='daily_cleanup_king')
-    if not scheduler.running: # Start scheduler if not already running (e.g. if start_schedulers wasn't called yet)
+        # Initialize databases and add daily cleanup job are now done outside __main__
+    # Start scheduler if it has jobs and isn't running (for local dev)
+    # In production, the scheduler should be started as part of the application setup
+    if not scheduler.running and scheduler.get_jobs():
         scheduler.start()
     flask_app.run(debug=True) # Use flask_app for Flask's built-in dev server
