@@ -201,13 +201,20 @@
     fetch(`/option_chain?expiry_date=${expiry}`)
       .then(res => res.json())
       .then(data => {
-        if (!data.option_chain) {
-          alert('No data received');
+        // Ensure data and data.option_chain exist and data.option_chain is an array
+        if (data && Array.isArray(data.option_chain)) {
+          renderTable(data.option_chain);
+          renderFooterMetrics(data.calculated_metrics);
+          saveDataToLocalStorage(expiry, data.option_chain, data.calculated_metrics);
+        } else {
+          console.error("Received invalid data structure from backend or option_chain is missing:", data);
+          alert('No valid option chain data received. Displaying empty table.');
+          clearTable(); // Clear table if data is invalid
+          renderFooterMetrics(data ? data.calculated_metrics : {}); // Attempt to render footer with what we have
+          // Optionally save empty or partial data if that's desired, or clear localStorage
+          // saveDataToLocalStorage(expiry, [], data ? data.calculated_metrics : {});
           return;
         }
-        renderTable(data.option_chain);
-        renderFooterMetrics(data.calculated_metrics);
-        saveDataToLocalStorage(expiry, data.option_chain, data.calculated_metrics);
       })
       .catch(err => {
         console.error('Error fetching option chain:', err);
@@ -218,6 +225,11 @@
   function renderTable(data) {
     clearTable();
 
+    // Add a safety check here: if data is not an array, default to an empty one.
+    if (!Array.isArray(data)) {
+        console.warn("renderTable received non-array data. Defaulting to empty array.");
+        data = [];
+    }
     // Sort data by strike_price ascending
     data.sort((a, b) => a.strike_price - b.strike_price);
 
@@ -369,10 +381,16 @@
         .then(res => res.json())
         .then(data => {
           if (!data.option_chain) {
-            alert('No data received');
+            console.warn('No option_chain data received during auto refresh');
+            // Optionally clear the table or show a message
+            clearTable();
+            renderFooterMetrics(data ? data.calculated_metrics : {});
             return;
           }
-          renderTable(data.option_chain);
+          // Ensure data.option_chain is an array before rendering
+          if (Array.isArray(data.option_chain)) {
+            renderTable(data.option_chain);
+          }
           renderFooterMetrics(data.calculated_metrics);
           saveDataToLocalStorage(expiry, data.option_chain, data.calculated_metrics);
         })
@@ -410,8 +428,13 @@
         !isDataStale(persistedData.timestamp) &&
         !isDataFromPreviousDay(persistedData.timestamp)) {
       console.log("Loading data from localStorage...");
-      renderTable(persistedData.option_chain);
-      renderFooterMetrics(persistedData.calculated_metrics);
+      // Ensure persistedData.option_chain is an array before rendering
+      if (Array.isArray(persistedData.option_chain)) {
+        renderTable(persistedData.option_chain);
+        renderFooterMetrics(persistedData.calculated_metrics);
+      } else {
+        console.warn("Persisted option_chain data is not an array. Fetching fresh.");
+      }
     } else {
       if (persistedData && isDataFromPreviousDay(persistedData.timestamp)) {
         console.log("Data in localStorage is from a previous day. Clearing for new day's baseline.");
