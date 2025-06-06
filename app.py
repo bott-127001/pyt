@@ -36,10 +36,6 @@ TOKEN_URL = 'https://api.upstox.com/v2/login/authorization/token'
 # ML Backend URL (assuming it runs on localhost:5001)
 ML_BACKEND_URL = os.environ.get('ML_BACKEND_URL', 'http://127.0.0.1:5001/ml')
 
-# Initialize both databases on startup (runs in production)
-init_db(EMPEROR_DB_FILE)
-init_db(KING_DB_FILE)
-
 # IST timezone offset
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -119,6 +115,9 @@ def init_db(db_file):
     ''')
     conn.commit()
     conn.close()
+# Initialize both databases on startup (runs in production)
+init_db(EMPEROR_DB_FILE)
+init_db(KING_DB_FILE)
 
 def store_token(access_token, refresh_token, expires_in_seconds, db_file):
     """Store the new access token in the database and delete old tokens."""
