@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Option Chain Dashboard</title>
+<style>
+  body {
+    font-family: Arial, sans-serif;
+    margin: 1rem;
+    background-color: #f9f9f9;
+  }
+  h1 {
+    text-align: center;
+  }
+  .controls {
+    margin-bottom: 1rem;
+    display: flex;
+    justify-content: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+  input[type="date"], button {
+    padding: 0.5rem 1rem;
+    font-size: 1rem;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 1rem;
+    background: white;
+  }
+  th, td {
+    border: 1px solid #ddd;
+    padding: 0.5rem;
+    text-align: center;
+  }
+  th {
+    background-color: #007bff;
+    color: white;
+  }
+  tfoot tr {
+    font-weight: bold;
+    background-color: #e9ecef;
+  }
+</style>
+</head>
+<body>
+<h1>Live Option Chain Dashboard</h1>
+<div class="controls">
+  <label for="expiryInput">Select Expiry Date:</label>
+  <input type="date" id="expiryInput" />
+  <button id="fetchBtn">Fetch Data</button>
+  <button id="startAutoBtn">Start Auto Refresh</button>
+  <button id="stopAutoBtn" disabled>Stop Refresh</button>
+  <a id="mlChatbotLink" href="#" style="margin-left: 1rem; align-self: center; padding: 0.5rem 1rem; background-color: #3b82f6; color: white; border-radius: 8px; text-decoration: none; font-weight: 600; font-family: 'Inter', 'Roboto', sans-serif; box-shadow: 0 2px 6px rgba(59,130,246,0.5); transition: background-color 0.2s ease;" onmouseover="this.style.backgroundColor='#2563eb'" onmouseout="this.style.backgroundColor='#3b82f6'">Go to ML Chatbot</a>
+</div>
+<table id="optionChainTable">
+  <thead>
+    <tr>
+      <th>Call Volume</th>
+      <th>Call OI</th>
+      <th>Call IV</th>
+      <th>Call Delta</th>
+      <th>Call LTP</th>
+      <th>Call Bid Qty</th>
+      <th>Call Bid Price</th>
+      <th>Call Ask Price</th>
+      <th>Call Ask Qty</th>
+      <th>Strike Price</th>
+      <th>Put Ask Qty</th>
+      <th>Put Ask Price</th>
+      <th>Put Bid Price</th>
+      <th>Put Bid Qty</th>
+      <th>Put LTP</th>
+      <th>Put Delta</th>
+      <th>Put IV</th>
+      <th>Put OI</th>
+      <th>Put Volume</th>
+    </tr>
+  </thead>
+  <tbody id="tableBody">
+    <!-- Data rows inserted here -->
+  </tbody>
+  <tfoot>
+    <tr id="totalsRow">
+      
+      <td></td><td></td><td></td><td></td><td></td><td></td><td></td>
+      <td></td><td></td><td>Totals</td><td></td><td></td><td></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td>
+    </tr>
+    <tr id="differencesRow">
+      
+      <td></td><td></td><td></td><td></td><td></td><td></td><td></td>
+      <td></td><td></td><td>Differences</td><td></td><td></td><td></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td>
+    </tr>
+    <tr id="deltaRow">
+      
+      <td></td><td></td><td></td><td></td><td></td><td></td><td></td>
+      <td></td><td></td><td>Delta (%)</td><td></td><td></td><td></td><td></td><td></td>
+      <td></td><td></td><td></td><td></td>
+    </tr>
+  </tfoot>
+</table>
+
+<script>
+  const expiryInput = document.getElementById('expiryInput');
+  const fetchBtn = document.getElementById('fetchBtn');
+  const startAutoBtn = document.getElementById('startAutoBtn');
+  const stopAutoBtn = document.getElementById('stopAutoBtn');
+  const tableBody = document.getElementById('tableBody');
+  const mlChatbotLink = document.getElementById('mlChatbotLink');
+  let autoRefreshInterval = null;
+  const LOCAL_STORAGE_KEY = 'optionChainDashboardData';
+  const FRESHNESS_THRESHOLD_SECONDS = 10; // Fetch fresh if older than 10s
+
+  // Get the current user role passed from the Flask backend
+  const currentUserRole = "{{ user_role }}";
+
+  // Set default expiry date to today
+  function setDefaultExpiryDate() {
+    let today = new Date().toISOString().split('T')[0];
+    // Check if there's a persisted expiry date
+    const persistedData = loadDataFromLocalStorage();
+    if (persistedData && persistedData.expiryDate) {
+        expiryInput.value = persistedData.expiryDate;
+        today = persistedData.expiryDate; // Use persisted expiry for chatbot link
+    } else {
+        expiryInput.value = today;
+    }
+    updateChatbotLink(today);
+  }
+
+  function updateChatbotLink(expiryDate) {
+    if (expiryDate) {
+      mlChatbotLink.href = `/ml-chatbot?expiry_date=${expiryDate}&role=${currentUserRole}`; // Pass role to chatbot link
+    }
+  }
+
+  function saveDataToLocalStorage(expiryDate, optionChain, calculatedMetrics) {
+    const dataToStore = {
+      expiryDate: expiryDate,
+      optionChain: optionChain,
+      calculatedMetrics: calculatedMetrics,
+      timestamp: new Date().toISOString()
+    };
+    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(dataToStore));
+  }
+
+  function loadDataFromLocalStorage() {
+    const storedData = localStorage.getItem(LOCAL_STORAGE_KEY);
+    if (storedData) {
+      try {
+        return JSON.parse(storedData);
+      } catch (e) {
+        console.error("Error parsing data from localStorage", e);
+        localStorage.removeItem(LOCAL_STORAGE_KEY); // Clear corrupted data
+        return null;
+      }
+    }
+    return null;
+  }
+
+  function isDataStale(timestamp) {
+    if (!timestamp) return true;
+    const dataTime = new Date(timestamp);
+    const now = new Date();
+    return (now - dataTime) / 1000 > FRESHNESS_THRESHOLD_SECONDS;
+  }
+
+  function isDataFromPreviousDay(timestamp) {
+    if (!timestamp) return true; // No timestamp, assume previous day or invalid
+    const dataDate = new Date(timestamp).toLocaleDateString();
+    const currentDate = new Date().toLocaleDateString();
+    return dataDate !== currentDate;
+  }
+  function clearTable() {
+    tableBody.innerHTML = '';
+    clearFooterRows();
+  }
+
+  function clearFooterRows() {
+    ['totalsRow', 'differencesRow', 'deltaRow'].forEach(id => {
+      const row = document.getElementById(id);
+       for(let i = 0; i < row.cells.length; i++) {
+        if (i !== 9) { // Assuming cell 9 (10th cell) is the label
+          row.cells[i].textContent = '';
+        }
+      }
+    });
+  }
+
+  function fetchOptionChain() {
+    const expiry = expiryInput.value;
+    if (!expiry) {
+      alert('Please select an expiry date');
+      return;
+    }
+    updateChatbotLink(expiry); // Update link on manual fetch too
+    fetch(`/option_chain?expiry_date=${expiry}`)
+      .then(res => res.json())
+      .then(data => {
+        // Ensure data and data.option_chain exist and data.option_chain is an array
+        if (data && Array.isArray(data.option_chain)) {
+          renderTable(data.option_chain);
+          renderFooterMetrics(data.calculated_metrics);
+          saveDataToLocalStorage(expiry, data.option_chain, data.calculated_metrics);
+        } else {
+          console.error("Received invalid data structure from backend or option_chain is missing:", data);
+          alert('No valid option chain data received. Displaying empty table.');
+          clearTable(); // Clear table if data is invalid
+          renderFooterMetrics(data ? data.calculated_metrics : {}); // Attempt to render footer with what we have
+          // Optionally save empty or partial data if that's desired, or clear localStorage
+          // saveDataToLocalStorage(expiry, [], data ? data.calculated_metrics : {});
+          return;
+        }
+      })
+      .catch(err => {
+        console.error('Error fetching option chain:', err);
+        alert('Error fetching option chain data');
+      });
+  }
+
+  function renderTable(data) {
+    clearTable();
+
+    // Add a safety check here: if data is not an array, default to an empty one.
+    if (!Array.isArray(data)) {
+        console.warn("renderTable received non-array data. Defaulting to empty array.");
+        data = [];
+    }
+    // Sort data by strike_price ascending
+    data.sort((a, b) => a.strike_price - b.strike_price);
+
+    data.forEach(item => {
+      const strike = item.strike_price;
+      const ce = item.call_options || {};
+      const pe = item.put_options || {};
+      const row = document.createElement('tr');
+
+      // Build row with columns in user specified order based on new data structure
+      row.innerHTML = `
+        <td>${ce.market_data?.volume ?? '-'}</td>
+        <td>${ce.market_data?.oi ?? '-'}</td>
+        <td>${ce.option_greeks?.iv ?? '-'}</td>
+        <td>${ce.option_greeks?.delta ?? '-'}</td>
+        <td>${ce.market_data?.ltp ?? '-'}</td>
+        <td>${ce.market_data?.bid_qty ?? '-'}</td>
+        <td>${ce.market_data?.bid_price ?? '-'}</td>
+        <td>${ce.market_data?.ask_price ?? '-'}</td>
+        <td>${ce.market_data?.ask_qty ?? '-'}</td>
+        <td>${strike}</td>
+        <td>${pe.market_data?.ask_qty ?? '-'}</td>
+        <td>${pe.market_data?.ask_price ?? '-'}</td>
+        <td>${pe.market_data?.bid_price ?? '-'}</td>
+        <td>${pe.market_data?.bid_qty ?? '-'}</td>
+        <td>${pe.market_data?.ltp ?? '-'}</td>
+        <td>${pe.option_greeks?.delta ?? '-'}</td>
+        <td>${pe.option_greeks?.iv ?? '-'}</td>
+        <td>${pe.market_data?.oi ?? '-'}</td>
+        <td>${pe.market_data?.volume ?? '-'}</td>
+      `;
+      tableBody.appendChild(row);
+    });
+  }
+
+   function renderFooterMetrics(calculatedMetrics) {
+    if (!calculatedMetrics) {
+      console.warn("No calculated metrics received from backend.");
+      return;
+    }
+
+    const totalsRow = document.getElementById('totalsRow');
+    const differencesRow = document.getElementById('differencesRow');
+    const deltaRow = document.getElementById('deltaRow');
+
+    // Helper to get value and format it
+    const getFormattedValue = (side, field, metricType, isPercent = false) => {
+      const value = calculatedMetrics[side]?.[field]?.[metricType];
+      if (value === undefined || value === null || isNaN(value)) return '-';
+      return isPercent ? parseFloat(value).toFixed(2) + '%' : parseFloat(value).toFixed(2);
+    };
+
+    // Populate Totals Row
+    // CE Side
+    totalsRow.cells[0].textContent = getFormattedValue('CE', 'totalTradedVolume', 'total'); // Call Volume
+    totalsRow.cells[1].textContent = getFormattedValue('CE', 'openInterest', 'total');    // Call OI
+    totalsRow.cells[2].textContent = getFormattedValue('CE', 'IV', 'total');               // Call IV
+    totalsRow.cells[3].textContent = getFormattedValue('CE', 'delta', 'total');            // Call Delta
+    totalsRow.cells[4].textContent = '-'; // Call LTP (not summed in backend for footer)
+    totalsRow.cells[5].textContent = getFormattedValue('CE', 'bidQty', 'total');           // Call Bid Qty
+    totalsRow.cells[6].textContent = '-'; // Call Bid Price
+    totalsRow.cells[7].textContent = '-'; // Call Ask Price
+    totalsRow.cells[8].textContent = getFormattedValue('CE', 'askQty', 'total');           // Call Ask Qty
+    // PE Side (Strike is cell 10)
+    totalsRow.cells[10].textContent = getFormattedValue('PE', 'askQty', 'total');          // Put Ask Qty
+    totalsRow.cells[11].textContent = '-'; // Put Ask Price
+    totalsRow.cells[12].textContent = '-'; // Put Bid Price
+    totalsRow.cells[13].textContent = getFormattedValue('PE', 'bidQty', 'total');          // Put Bid Qty
+    totalsRow.cells[14].textContent = '-'; // Put LTP
+    totalsRow.cells[15].textContent = getFormattedValue('PE', 'delta', 'total');           // Put Delta
+    totalsRow.cells[16].textContent = getFormattedValue('PE', 'IV', 'total');              // Put IV
+    totalsRow.cells[17].textContent = getFormattedValue('PE', 'openInterest', 'total');   // Put OI
+    totalsRow.cells[18].textContent = getFormattedValue('PE', 'totalTradedVolume', 'total'); // Put Volume
+
+    // Populate Differences Row
+    differencesRow.cells[0].textContent = getFormattedValue('CE', 'totalTradedVolume', 'difference');
+    differencesRow.cells[1].textContent = getFormattedValue('CE', 'openInterest', 'difference');
+    differencesRow.cells[2].textContent = getFormattedValue('CE', 'IV', 'difference');
+    differencesRow.cells[3].textContent = getFormattedValue('CE', 'delta', 'difference');
+    differencesRow.cells[4].textContent = '-';
+    differencesRow.cells[5].textContent = getFormattedValue('CE', 'bidQty', 'difference');
+    differencesRow.cells[6].textContent = '-';
+    differencesRow.cells[7].textContent = '-';
+    differencesRow.cells[8].textContent = getFormattedValue('CE', 'askQty', 'difference');
+    differencesRow.cells[10].textContent = getFormattedValue('PE', 'askQty', 'difference');
+    differencesRow.cells[11].textContent = '-';
+    differencesRow.cells[12].textContent = '-';
+    differencesRow.cells[13].textContent = getFormattedValue('PE', 'bidQty', 'difference');
+    differencesRow.cells[14].textContent = '-';
+    differencesRow.cells[15].textContent = getFormattedValue('PE', 'delta', 'difference');
+    differencesRow.cells[16].textContent = getFormattedValue('PE', 'IV', 'difference');
+    differencesRow.cells[17].textContent = getFormattedValue('PE', 'openInterest', 'difference');
+    differencesRow.cells[18].textContent = getFormattedValue('PE', 'totalTradedVolume', 'difference');
+
+    // Populate Delta (%) Row
+    deltaRow.cells[0].textContent = getFormattedValue('CE', 'totalTradedVolume', 'delta_percent', true);
+    deltaRow.cells[1].textContent = getFormattedValue('CE', 'openInterest', 'delta_percent', true);
+    deltaRow.cells[2].textContent = getFormattedValue('CE', 'IV', 'delta_percent', true);
+    deltaRow.cells[3].textContent = getFormattedValue('CE', 'delta', 'delta_percent', true);
+    deltaRow.cells[4].textContent = '-';
+    deltaRow.cells[5].textContent = getFormattedValue('CE', 'bidQty', 'delta_percent', true);
+    deltaRow.cells[6].textContent = '-';
+    deltaRow.cells[7].textContent = '-';
+    deltaRow.cells[8].textContent = getFormattedValue('CE', 'askQty', 'delta_percent', true);
+    deltaRow.cells[10].textContent = getFormattedValue('PE', 'askQty', 'delta_percent', true);
+    deltaRow.cells[11].textContent = '-';
+    deltaRow.cells[12].textContent = '-';
+    deltaRow.cells[13].textContent = getFormattedValue('PE', 'bidQty', 'delta_percent', true);
+    deltaRow.cells[14].textContent = '-';
+    deltaRow.cells[15].textContent = getFormattedValue('PE', 'delta', 'delta_percent', true);
+    deltaRow.cells[16].textContent = getFormattedValue('PE', 'IV', 'delta_percent', true);
+    deltaRow.cells[17].textContent = getFormattedValue('PE', 'openInterest', 'delta_percent', true);
+    deltaRow.cells[18].textContent = getFormattedValue('PE', 'totalTradedVolume', 'delta_percent', true);
+  }
+
+  fetchBtn.addEventListener('click', () => {
+    const expiry = expiryInput.value;
+    if (!expiry) {
+      alert('Please select an expiry date');
+      return;
+    }
+    // Trigger backend fetch first
+    fetch(`/fetch_data?expiry_date=${expiry}`)
+      .then(res => res.json())
+      .then(() => {
+        // After fetch completes, get stored data
+        fetchOptionChain();
+      })
+      .catch(err => {
+        console.error('Error triggering fetch:', err);
+        alert('Error triggering data fetch');
+      });
+  });
+
+  startAutoBtn.addEventListener('click', () => {
+    if (autoRefreshInterval) return;
+    const expiry = expiryInput.value;
+    if (!expiry) {
+      alert('Please select an expiry date');
+      return;
+    }
+    // Immediately fetch fresh data and update UI, then repeat every 5 seconds
+    function fetchAndUpdate() {
+      fetch(`/fetch_data?expiry_date=${expiry}`)
+        .then(res => res.json())
+        .then(() => {
+          return fetch(`/option_chain?expiry_date=${expiry}`);
+        })
+        .then(res => res.json())
+        .then(data => {
+          if (!data.option_chain) {
+            console.warn('No option_chain data received during auto refresh');
+            // Optionally clear the table or show a message
+            clearTable();
+            renderFooterMetrics(data ? data.calculated_metrics : {});
+            return;
+          }
+          // Ensure data.option_chain is an array before rendering
+          if (Array.isArray(data.option_chain)) {
+            renderTable(data.option_chain);
+          }
+          renderFooterMetrics(data.calculated_metrics);
+          saveDataToLocalStorage(expiry, data.option_chain, data.calculated_metrics);
+        })
+        .catch(err => {
+          console.error('Error during auto refresh fetch:', err);
+          alert('Error fetching data during auto refresh');
+        });
+    }
+    fetchAndUpdate();
+    autoRefreshInterval = setInterval(fetchAndUpdate, 5000);
+    startAutoBtn.disabled = true;
+    stopAutoBtn.disabled = false;
+  });
+
+  stopAutoBtn.addEventListener('click', () => {
+    if (autoRefreshInterval) {
+      clearInterval(autoRefreshInterval);
+      autoRefreshInterval = null;
+      startAutoBtn.disabled = false;
+      stopAutoBtn.disabled = true;
+    }
+  });
+
+  expiryInput.addEventListener('change', () => {
+    updateChatbotLink(expiryInput.value);
+  });
+
+  // Initialize
+  function initializeDashboard() {
+    setDefaultExpiryDate(); // Sets expiry input and chatbot link
+    const persistedData = loadDataFromLocalStorage();
+
+    if (persistedData && 
+        persistedData.expiryDate === expiryInput.value && 
+        !isDataStale(persistedData.timestamp) &&
+        !isDataFromPreviousDay(persistedData.timestamp)) {
+      console.log("Loading data from localStorage...");
+      // Ensure persistedData.option_chain is an array before rendering
+      if (Array.isArray(persistedData.option_chain)) {
+        renderTable(persistedData.option_chain);
+        renderFooterMetrics(persistedData.calculated_metrics);
+      } else {
+        console.warn("Persisted option_chain data is not an array. Fetching fresh.");
+      }
+    } else {
+      if (persistedData && isDataFromPreviousDay(persistedData.timestamp)) {
+        console.log("Data in localStorage is from a previous day. Clearing for new day's baseline.");
+      }
+      console.log("No fresh/valid data in localStorage (stale, expiry mismatch, or previous day). Will fetch on demand.");
+      if (persistedData) localStorage.removeItem(LOCAL_STORAGE_KEY); // Clear stale or mismatched data
+    }
+  }
+  initializeDashboard();
+</script>
+</body>
+</html>

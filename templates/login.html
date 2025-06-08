@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Login with Upstox</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            height: 100vh;
+            justify-content: center;
+            align-items: center;
+            background-color: #f5f5f5;
+        }
+        .login-container {
+            background: white;
+            padding: 2rem 3rem;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+            text-align: center;
+            max-width: 400px;
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        button {
+            display: block; /* Make buttons block elements */
+            width: 100%; /* Make buttons full width */
+            box-sizing: border-box; /* Include padding and border in element's total width */
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 1rem 2rem;
+            font-size: 1.2rem;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 0.5rem 0; /* Add margin top and bottom */
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        input[type="text"] {
+            width: 100%;
+            padding: 0.75rem;
+            font-size: 1rem;
+            margin-top: 1rem;
+            box-sizing: border-box;
+        }
+        label {
+            display: block;
+            margin-top: 1rem;
+            font-weight: bold;
+        }
+        .message {
+            margin-top: 1rem;
+            color: red;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <h1>Login</h1>
+        <p>Choose your role to log in:</p>
+        <button onclick="window.location.href='/login/emperor'">Login as Emperor (My Account)</button>
+        <button onclick="window.location.href='/login/king'">Login as King (Friend's Account)</button>
+        <form id="authCodeForm">
+            <label for="authCodeInput">Or paste Authorization Code here:</label>
+            <input type="text" id="authCodeInput" name="authCode" placeholder="Paste authorization code" required />
+            <button type="submit">Submit Authorization Code</button>
+        </form>
+        <div class="message" id="message"></div>
+    </div>
+    <script>
+        const form = document.getElementById('authCodeForm');
+        const authCodeInput = document.getElementById('authCodeInput');
+        const messageDiv = document.getElementById('message');
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const code = authCodeInput.value.trim();
+            if (!code) {
+                messageDiv.textContent = 'Please enter the authorization code.';
+                return;
+            }
+            messageDiv.textContent = '';
+            try {
+                const response = await fetch('/manual_auth', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ code })
+                });
+                if (response.ok) {
+                    window.location.href = '/dashboard';
+                } else {
+                    const data = await response.json();
+                    messageDiv.textContent = data.error || 'Failed to authenticate.';
+                }
+            } catch (err) {
+                messageDiv.textContent = 'Error connecting to server.';
+            }
+        });
+    </script>
+</body>
+</html>
